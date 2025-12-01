@@ -1,0 +1,244 @@
+import tkinter as tk
+from tkinter import ttk, messagebox
+import pyodbc
+from decimal import Decimal
+
+# 1. KHỞI TẠO TKINTER
+
+root = tk.Tk()
+root.title("QUẢN LÝ MENU QUÁN CÀ PHÊ (SQL Server)")
+root.geometry("650x450")
+root.resizable(False, False)
+mode = tk.IntVar(value=0) 
+
+
+# 2. KẾT NỐI SQL SERVER (WINDOWS AUTHENTICATION)
+
+def connect_db():
+    try:
+        # WINDOWS AUTHENTICATION
+        connection_string = (
+            "Driver={ODBC Driver 17 for SQL Server};"
+            "Server=LAPTOP-39F4IT9F\SQLEXPRESS;"  # <<<Thay bằng tên sever admin>>>
+            "Database=QLQUANCAFE;"
+            "Trusted_Connection=yes;"       
+        )
+        return pyodbc.connect(connection_string)
+    except pyodbc.Error as ex:
+        sqlstate = ex.args[0]
+        messagebox.showerror("Lỗi Kết Nối", f"Không thể kết nối CSDL: {sqlstate}. Vui lòng kiểm tra chuỗi kết nối và quyền truy cập Windows.")
+        return None
+
+# 3. CÁC HÀM XỬ LÝ GIAO DIỆN VÀ DỮ LIỆU
+
+def update_button_states():
+    """Cập nhật trạng thái các nút dựa trên biến mode."""
+    if mode.get() == 0:
+        btn_them.config(state='normal')
+        btn_luu.config(text="Lưu", state='disabled')
+        btn_sua.config(state='normal')
+    else: 
+        btn_them.config(state='disabled')
+        btn_luu.config(text="Cập nhật", state='normal')
+        btn_sua.config(state='disabled')
+
+def clear_input():
+    """Xóa trắng các trường nhập liệu và đặt lại chế độ Thêm mới."""
+    entry_mamon.config(state='normal')
+    entry_mamon.delete(0, tk.END)
+    entry_mamon.config(state='readonly')
+    
+    entry_tenmon.delete(0, tk.END)
+    entry_gia.delete(0, tk.END)
+    cbb_loai.set("")
+    
+    tree.selection_remove(tree.selection())
+    
+    mode.set(0)
+    update_button_states()
+
+def load_data():
+    """Tải và hiển thị dữ liệu Menu từ SQL Server lên Treeview, định dạng cột Giá."""
+    for i in tree.get_children():
+        tree.delete(i)
+    
+    conn = connect_db()
+    if conn is None: return
+        
+    cursor = conn.cursor()
+    try:
+        cursor.execute("SELECT MaMon, TenMon, Gia, Loai FROM MENU ORDER BY MaMon")
+        for row in cursor.fetchall():
+            mamon, tenmon, gia_decimal, loai = row
+            gia_string = f"{gia_decimal:,.0f}" 
+            
+            tree.insert("", tk.END, values=(mamon, tenmon, gia_string, loai))
+            
+    except Exception as e:
+        messagebox.showerror("Lỗi Truy Vấn", str(e))
+    finally:
+        conn.close()
+
+def execute_save_or_update():
+    """Xử lý hành động Lưu (Thêm) hoặc Cập nhật (Sửa)."""
+    mamon = entry_mamon.get()
+    tenmon = entry_tenmon.get()
+    gia_str = entry_gia.get().replace(',', '')
+    loai = cbb_loai.get()
+    
+    if not tenmon or not gia_str or not loai:
+        messagebox.showwarning("Thiếu dữ liệu", "Vui lòng nhập đủ Tên món, Giá và Loại.")
+        return
+        
+    try:
+        gia = Decimal(gia_str) 
+    except:
+        messagebox.showwarning("Lỗi Định dạng", "Giá phải là số.")
+        return
+
+    conn = connect_db()
+    if conn is None: return
+    cursor = conn.cursor()
+
+    try:
+        if mode.get() == 0: # THÊM MỚI
+            sql = "INSERT INTO MENU (TenMon, Gia, Loai) VALUES (?, ?, ?)"
+            cursor.execute(sql, tenmon, gia, loai)
+            messagebox.showinfo("Thành công", "Đã thêm món mới.")
+        else: # CẬP NHẬT
+            if not mamon:
+                messagebox.showerror("Lỗi", "Không tìm thấy Mã món để cập nhật.")
+                return
+            sql = "UPDATE MENU SET TenMon=?, Gia=?, Loai=? WHERE MaMon=?"
+            cursor.execute(sql, tenmon, gia, loai, mamon)
+            messagebox.showinfo("Thành công", f"Đã cập nhật món có mã {mamon}.")
+            
+        conn.commit()
+        load_data()
+        clear_input()
+
+    except Exception as e:
+        messagebox.showerror("Lỗi CSDL", str(e))
+    finally:
+        conn.close()
+
+def sua_nv_clicked():
+    """Tải thông tin món đã chọn lên các trường nhập liệu và chuyển chế độ Sửa."""
+    selected_item = tree.selection()
+    if not selected_item:
+        messagebox.showwarning("Chưa chọn", "Hãy chọn một món trong danh sách để sửa.")
+        return
+        
+    values = tree.item(selected_item)['values']
+    
+    clear_input()
+    
+    # Hiển thị Mã món
+    entry_mamon.config(state='normal')
+    entry_mamon.insert(0, values[0])   
+    entry_mamon.config(state='readonly') 
+    
+    entry_tenmon.insert(0, values[1])  
+    
+    # Giá trị Treeview
+    gia_only_digits = str(values[2]).replace(',', '') 
+    entry_gia.insert(0, gia_only_digits)     
+    
+    cbb_loai.set(values[3])            
+    
+    # Chuyển sang chế độ Sửa
+    mode.set(1) 
+    update_button_states()
+    messagebox.showinfo("Chế độ Sửa", "Đã tải dữ liệu lên. Thay đổi thông tin và nhấn nút 'Cập nhật'.")
+
+
+def xoa_mon():
+    """Xóa món đã chọn khỏi database."""
+    selected_item = tree.selection()
+    if not selected_item:
+        messagebox.showwarning("Chưa chọn", "Hãy chọn một món trong danh sách để xóa.")
+        return
+        
+    mamon = tree.item(selected_item)['values'][0]
+    tenmon = tree.item(selected_item)['values'][1]
+    
+    if messagebox.askyesno("Xác nhận Xóa", f"Bạn có chắc muốn xóa món '{tenmon}' (Mã: {mamon}) không?"):
+        conn = connect_db()
+        if conn is None: return
+        cursor = conn.cursor()
+        
+        try:
+            sql = "DELETE FROM MENU WHERE MaMon=?"
+            cursor.execute(sql, mamon)
+            conn.commit()
+            messagebox.showinfo("Thành công", "Đã xóa món thành công.")
+            load_data()
+            clear_input()
+        except Exception as e:
+            messagebox.showerror("Lỗi Xóa", str(e))
+        finally:
+            conn.close()
+
+# 4. THIẾT LẬP GIAO DIỆN
+
+# Tiêu đề
+lbl_title = tk.Label(root, text="QUẢN LÝ MENU ĐỒ UỐNG VÀ BÁNH", font=("Arial", 16, "bold"), fg="darkblue")
+lbl_title.pack(pady=10)
+
+# --- Frame Nhập Thông Tin ---
+frame_info = tk.Frame(root, padx=10, pady=5)
+frame_info.pack(fill="x")
+
+tk.Label(frame_info, text="Mã món:").grid(row=0, column=0, padx=5, pady=2, sticky="w")
+entry_mamon = tk.Entry(frame_info, width=10, state='readonly') 
+entry_mamon.grid(row=0, column=1, padx=5, pady=2, sticky="w")
+
+tk.Label(frame_info, text="Giá:").grid(row=0, column=2, padx=5, pady=2, sticky="w")
+entry_gia = tk.Entry(frame_info, width=15)
+entry_gia.grid(row=0, column=3, padx=5, pady=2, sticky="w")
+
+tk.Label(frame_info, text="Tên món:").grid(row=1, column=0, padx=5, pady=2, sticky="w")
+entry_tenmon = tk.Entry(frame_info, width=30)
+entry_tenmon.grid(row=1, column=1, padx=5, pady=2, sticky="w")
+
+tk.Label(frame_info, text="Loại:").grid(row=1, column=2, padx=5, pady=2, sticky="w")
+cbb_loai = ttk.Combobox(frame_info, values=["Cà phê", "Trà", "Bánh", "Khác"], width=13, state="readonly")
+cbb_loai.grid(row=1, column=3, padx=5, pady=2, sticky="w")
+
+# --- Frame Nút Chức Năng ---
+frame_btn = tk.Frame(root, pady=10)
+frame_btn.pack()
+
+btn_them = tk.Button(frame_btn, text="Thêm", width=10, command=execute_save_or_update)
+btn_them.grid(row=0, column=0, padx=5)
+
+btn_luu = tk.Button(frame_btn, text="Lưu", width=10, command=execute_save_or_update)
+btn_luu.grid(row=0, column=1, padx=5) 
+
+btn_sua = tk.Button(frame_btn, text="Sửa", width=10, command=sua_nv_clicked)
+btn_sua.grid(row=0, column=2, padx=5)
+
+tk.Button(frame_btn, text="Xóa", width=10, command=xoa_mon).grid(row=0, column=3, padx=5)
+tk.Button(frame_btn, text="Hủy/Mới", width=10, command=clear_input).grid(row=0, column=4, padx=5)
+
+# --- Bảng Danh Sách Menu ---
+columns = ("MaMon", "TenMon", "Gia", "Loai")
+tree = ttk.Treeview(root, columns=columns, show="headings", height=8)
+
+tree.heading("MaMon", text="Mã")
+tree.column("MaMon", width=50, anchor="center")
+tree.heading("TenMon", text="Tên Món")
+tree.column("TenMon", width=200)
+tree.heading("Gia", text="Giá")
+tree.column("Gia", width=100, anchor="e") 
+tree.heading("Loai", text="Loại")
+tree.column("Loai", width=150)
+
+tree.pack(padx=10, pady=5, fill="both", expand=True)
+
+# Tải dữ liệu và thiết lập trạng thái nút ban đầu
+load_data()
+update_button_states()
+
+# Chạy vòng lặp chính của Tkinter
+root.mainloop()
